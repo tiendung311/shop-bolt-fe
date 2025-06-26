@@ -166,7 +166,6 @@ export function UserList() {
 
       {chatWithUser && (
         <ChatBox
-          token={localStorage.getItem("token")}
           recipient={chatWithUser}
           onClose={() => setChatWithUser(null)}
         />

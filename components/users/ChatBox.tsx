@@ -7,7 +7,7 @@ export const ChatBox = ({ token, recipient, onClose }: any) => {
     () => recipient?.keycloakUserId,
     [recipient?.keycloakUserId]
   );
-  const { messages, sendMessage } = useChatSocket(token, receiverId);
+  const { messages, sendMessage } = useChatSocket(receiverId);
 
   const [text, setText] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);

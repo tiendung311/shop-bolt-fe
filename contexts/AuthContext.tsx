@@ -36,8 +36,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     isLoading: true,
   });
 
+  // Truy cập WebSocket để gọi refresh
+  const ws =
+    typeof window !== "undefined" ? (window as any).__wsRefresh__ : null;
+
+  const notifyWebSocket = () => {
+    if (typeof ws === "function") ws();
+  };
+
   useEffect(() => {
-    // Check for stored auth data on mount
     const storedUser = localStorage.getItem("authUser");
     if (storedUser) {
       try {
@@ -47,7 +54,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           isAuthenticated: true,
           isLoading: false,
         });
-      } catch (error) {
+      } catch {
         localStorage.removeItem("authUser");
         setAuthState({
           user: null,
@@ -86,7 +93,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const data = await response.json();
         const accessToken = data.access_token;
 
-        // Decode token để lấy thông tin user (hoặc gọi API userinfo)
         const payload = JSON.parse(atob(accessToken.split(".")[1]));
 
         const authUser: AuthUser = {
@@ -105,6 +111,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           isAuthenticated: true,
           isLoading: false,
         });
+
+        notifyWebSocket(); // 🔔 thông báo WS connect lại
 
         return true;
       }
@@ -139,7 +147,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       });
 
       if (response.ok) {
-        // Sau khi tạo, tự động login
         return await login(username, password);
       }
 
@@ -158,6 +165,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       isAuthenticated: false,
       isLoading: false,
     });
+    notifyWebSocket(); // 🔔 disconnect WS khi logout
   };
 
   return (
