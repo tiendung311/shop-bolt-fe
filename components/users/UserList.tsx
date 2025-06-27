@@ -118,7 +118,6 @@ export function UserList() {
               </div>
             ) : (
               filteredUsers.map((user) => {
-                // console.log("Render user:", user);
                 return (
                   <div
                     key={user.id}
@@ -137,7 +136,7 @@ export function UserList() {
                         Tạo ngày: {formatDate(user.createdAt)}
                       </p>
                     </div>
-                    <div className="flex items-center gap-2">
+                    {/* <div className="flex items-center gap-2">
                       <Button
                         variant="outline"
                         size="sm"
@@ -153,7 +152,7 @@ export function UserList() {
                       >
                         <Trash2 className="h-4 w-4" />
                       </Button>
-                    </div>
+                    </div> */}
                   </div>
                 );
               })

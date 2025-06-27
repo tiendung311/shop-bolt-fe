@@ -15,7 +15,6 @@ export const useChatSocket = (receiverId: string) => {
     fetch(`http://localhost:8080/chat/history/${currentUserId}/${receiverId}`)
       .then((res) => res.json())
       .then((data) => {
-        console.log("🧾 Fetched chat history:", data);
         setMessages(data);
       })
       .catch((err) => console.error("Error loading chat history:", err));
