@@ -1,73 +1,110 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
-import { Plus, Search, Edit, Trash2 } from "lucide-react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { Plus, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { formatDate } from "@/lib/store";
 import { UserForm } from "./UserForm";
 import { User } from "@/types";
 import { ChatBox } from "./ChatBox";
+import { useWebSocket } from "@/hooks/WebSocketProvider";
 
 export function UserList() {
   const [searchTerm, setSearchTerm] = useState("");
   const [showForm, setShowForm] = useState(false);
   const [editingUser, setEditingUser] = useState<User | null>(null);
   const [users, setUsers] = useState<User[]>([]);
-
-  const currentUser = JSON.parse(localStorage.getItem("authUser") || "{}");
-
+  const [conversations, setConversations] = useState<any[]>([]);
   const [chatWithUser, setChatWithUser] = useState<User | null>(null);
 
-  const handleOpenChat = (user: User) => {
-    if (chatWithUser?.id !== user.id) {
-      setChatWithUser(user);
-    }
-  };
+  const currentUser = JSON.parse(localStorage.getItem("authUser") || "{}");
+  const token = localStorage.getItem("token") || "";
+  const { latestMessage } = useWebSocket();
 
-  useEffect(() => {
+  const loadUsers = useCallback(() => {
     fetch("http://localhost:8080/users")
-      .then((res) => {
-        if (!res.ok) throw new Error("Failed to fetch users");
-        return res.json();
-      })
-      // Lấy tất cả người dùng từ API
-      // .then((data: User[]) => setUsers(data))
+      .then((res) => res.json())
       .then((data: User[]) => {
-        // Lọc ra những user KHÁC với currentUser
         const filtered = data.filter(
           (user) => user.username !== currentUser.username
         );
         setUsers(filtered);
-      })
-      .catch((err) => console.error("Error fetching users:", err));
+      });
   }, [currentUser.username]);
 
-  const filteredUsers = users.filter((user) => {
-    const fullName = `${user.lastName} ${user.firstName}`.toLowerCase();
-    return (
-      fullName.includes(searchTerm.toLowerCase()) ||
-      user.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      user.username.toLowerCase().includes(searchTerm.toLowerCase())
-    );
-  });
+  const loadConversations = useCallback(() => {
+    fetch("http://localhost:8080/api/chat/conversations", {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((res) => res.json())
+      .then((data) => setConversations(data));
+    // console.log("🔄 Conversations reloaded", conversations);
+  }, [token]);
 
-  const handleEdit = (user: User) => {
-    console.log("Edit user:", user);
-    setEditingUser(user);
-    setShowForm(true);
-  };
+  useEffect(() => {
+    loadUsers();
+    loadConversations();
+  }, [loadUsers, loadConversations]);
 
-  const handleDelete = async (userId: string) => {
-    if (confirm("Bạn có chắc muốn xóa người dùng này?")) {
-      try {
-        await fetch(`/users/${userId}`, { method: "DELETE" });
-        setUsers((prev) => prev.filter((u) => u.id !== userId));
-      } catch (err) {
-        console.error("Error deleting user:", err);
-      }
+  // 👇 Khi có tin nhắn đến hoặc đi → reload
+  useEffect(() => {
+    if (
+      latestMessage &&
+      (latestMessage.sender === currentUser.id ||
+        latestMessage.receiver === currentUser.id)
+    ) {
+      loadConversations();
+    }
+  }, [latestMessage, currentUser.id, loadConversations]);
+
+  // 👇 Mỗi khi conversations hoặc users thay đổi, cập nhật mergedUsers
+  const mergedUsers = useMemo(() => {
+    return users.map((user) => {
+      const convo = conversations.find((c) => c.userId === user.keycloakUserId);
+      const isMeSender = convo?.senderId === currentUser.id;
+
+      // Nếu đang mở ChatBox với user này → coi là đã đọc
+      const isChattingWithThisUser = chatWithUser?.id === user.id;
+
+      return {
+        ...user,
+        lastMessage: convo
+          ? `${isMeSender ? "Tôi" : convo.username}: ${convo.lastMessage}`
+          : "",
+        isUnread: !isChattingWithThisUser && (convo?.isUnread || false),
+      };
+    });
+  }, [users, conversations, currentUser.id, chatWithUser]);
+
+  const filteredUsers = useMemo(() => {
+    const term = searchTerm.toLowerCase();
+    return mergedUsers.filter((user) => {
+      const fullName = `${user.lastName} ${user.firstName}`.toLowerCase();
+      return (
+        fullName.includes(term) ||
+        user.email.toLowerCase().includes(term) ||
+        user.username.toLowerCase().includes(term)
+      );
+    });
+  }, [mergedUsers, searchTerm]);
+
+  const handleOpenChat = async (user: User) => {
+    if (chatWithUser?.id !== user.id) {
+      await fetch("http://localhost:8080/api/chat/mark-read", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          fromUserId: user.keycloakUserId,
+          toUserId: currentUser.id,
+        }),
+      });
+      setChatWithUser(user);
+      loadConversations();
     }
   };
 
@@ -75,6 +112,10 @@ export function UserList() {
     setShowForm(false);
     setEditingUser(null);
   };
+
+  const handleNewMessage = useCallback(() => {
+    loadConversations(); // dùng hàm đã khai báo trước
+  }, [token]);
 
   return (
     <div className="space-y-6">
@@ -117,45 +158,44 @@ export function UserList() {
                   : "Chưa có người dùng nào"}
               </div>
             ) : (
-              filteredUsers.map((user) => {
-                return (
-                  <div
-                    key={user.id}
-                    onClick={() => handleOpenChat(user)}
-                    className="flex items-center justify-between p-4 border border-gray-200 rounded-lg hover:shadow-md transition-shadow"
-                  >
-                    <div className="flex-1">
-                      <div className="flex items-center gap-3 mb-2">
-                        <h3 className="font-semibold text-gray-900">
-                          {user.lastName} {user.firstName}
-                        </h3>
-                        <Badge variant="secondary">@{user.username}</Badge>
-                      </div>
-                      <p className="text-gray-600 mb-1">{user.email}</p>
-                      <p className="text-sm text-gray-500">
-                        Tạo ngày: {formatDate(user.createdAt)}
-                      </p>
+              filteredUsers.map((user) => (
+                <div
+                  key={user.id}
+                  onClick={() => handleOpenChat(user)}
+                  className={`flex items-center justify-between p-4 border rounded-lg transition-shadow cursor-pointer ${
+                    user.isUnread ? "bg-white" : "bg-gray-100"
+                  } hover:shadow-md`}
+                >
+                  <div className="flex-1">
+                    <div className="flex items-center gap-3 mb-1">
+                      <h3
+                        className={`font-semibold ${
+                          user.isUnread ? "text-gray-900" : "text-gray-500"
+                        }`}
+                      >
+                        {user.lastName} {user.firstName}
+                      </h3>
+                      <Badge variant="secondary">@{user.username}</Badge>
                     </div>
-                    {/* <div className="flex items-center gap-2">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => handleEdit(user)}
-                      >
-                        <Edit className="h-4 w-4" />
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => handleDelete(user.id)}
-                        className="text-red-600 hover:text-red-700"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
-                    </div> */}
+                    {user.lastMessage && (
+                      <div className="flex justify-between items-center">
+                        <p
+                          className={`text-sm truncate max-w-xs ${
+                            user.isUnread
+                              ? "font-semibold text-black"
+                              : "text-gray-500"
+                          }`}
+                        >
+                          {user.lastMessage}
+                        </p>
+                        {user.isUnread && (
+                          <span className="w-2 h-2 bg-blue-500 rounded-full ml-2"></span>
+                        )}
+                      </div>
+                    )}
                   </div>
-                );
-              })
+                </div>
+              ))
             )}
           </div>
         </CardContent>
@@ -166,7 +206,9 @@ export function UserList() {
       {chatWithUser && (
         <ChatBox
           recipient={chatWithUser}
+          currentUsername={currentUser.username}
           onClose={() => setChatWithUser(null)}
+          onNewMessage={handleNewMessage}
         />
       )}
     </div>

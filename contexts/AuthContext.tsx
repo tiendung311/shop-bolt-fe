@@ -36,7 +36,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     isLoading: true,
   });
 
-  // Truy cập WebSocket để gọi refresh
   const ws =
     typeof window !== "undefined" ? (window as any).__wsRefresh__ : null;
 
@@ -44,9 +43,83 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (typeof ws === "function") ws();
   };
 
+  const getTokenExpiry = () =>
+    parseInt(localStorage.getItem("tokenExpiry") || "0");
+
+  const refreshAccessToken = async (): Promise<boolean> => {
+    const refreshToken = localStorage.getItem("refreshToken");
+    if (!refreshToken) return false;
+
+    const params = new URLSearchParams();
+    params.append("client_id", "api-gateway");
+    params.append("grant_type", "refresh_token");
+    params.append("refresh_token", refreshToken);
+
+    try {
+      const res = await fetch(
+        "http://localhost:8180/realms/microservice/protocol/openid-connect/token",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded",
+          },
+          body: params.toString(),
+        }
+      );
+
+      if (!res.ok) return false;
+
+      const data = await res.json();
+      const { access_token, refresh_token, expires_in } = data;
+      const payload = JSON.parse(atob(access_token.split(".")[1]));
+
+      const authUser: AuthUser = {
+        id: payload.sub,
+        firstName: payload.given_name,
+        lastName: payload.family_name,
+        email: payload.email,
+        username: payload.preferred_username,
+      };
+
+      localStorage.setItem("authUser", JSON.stringify(authUser));
+      localStorage.setItem("token", access_token);
+      localStorage.setItem("refreshToken", refresh_token);
+      localStorage.setItem(
+        "tokenExpiry",
+        (Date.now() + expires_in * 1000).toString()
+      );
+
+      setAuthState({
+        user: authUser,
+        isAuthenticated: true,
+        isLoading: false,
+      });
+
+      return true;
+    } catch (err) {
+      console.error("Token refresh error:", err);
+      return false;
+    }
+  };
+
+  // Tự động refresh token trước khi hết hạn
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const expiry = getTokenExpiry();
+      const now = Date.now();
+
+      if (expiry - now < 60_000) {
+        refreshAccessToken();
+      }
+    }, 30_000); // Kiểm tra mỗi 30s
+
+    return () => clearInterval(interval);
+  }, []);
+
   useEffect(() => {
     const storedUser = localStorage.getItem("authUser");
-    if (storedUser) {
+    const token = localStorage.getItem("token");
+    if (storedUser && token) {
       try {
         const user = JSON.parse(storedUser);
         setAuthState({
@@ -55,12 +128,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           isLoading: false,
         });
       } catch {
-        localStorage.removeItem("authUser");
-        setAuthState({
-          user: null,
-          isAuthenticated: false,
-          isLoading: false,
-        });
+        logout();
       }
     } else {
       setAuthState((prev) => ({ ...prev, isLoading: false }));
@@ -71,13 +139,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     username: string,
     password: string
   ): Promise<boolean> => {
-    try {
-      const params = new URLSearchParams();
-      params.append("client_id", "api-gateway");
-      params.append("grant_type", "password");
-      params.append("username", username);
-      params.append("password", password);
+    const params = new URLSearchParams();
+    params.append("client_id", "api-gateway");
+    params.append("grant_type", "password");
+    params.append("username", username);
+    params.append("password", password);
 
+    try {
       const response = await fetch(
         "http://localhost:8180/realms/microservice/protocol/openid-connect/token",
         {
@@ -89,35 +157,37 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
       );
 
-      if (response.ok) {
-        const data = await response.json();
-        const accessToken = data.access_token;
+      if (!response.ok) return false;
 
-        const payload = JSON.parse(atob(accessToken.split(".")[1]));
+      const data = await response.json();
+      const { access_token, refresh_token, expires_in } = data;
+      const payload = JSON.parse(atob(access_token.split(".")[1]));
 
-        const authUser: AuthUser = {
-          id: payload.sub,
-          firstName: payload.given_name,
-          lastName: payload.family_name,
-          email: payload.email,
-          username: payload.preferred_username,
-        };
+      const authUser: AuthUser = {
+        id: payload.sub,
+        firstName: payload.given_name,
+        lastName: payload.family_name,
+        email: payload.email,
+        username: payload.preferred_username,
+      };
 
-        localStorage.setItem("authUser", JSON.stringify(authUser));
-        localStorage.setItem("token", accessToken);
+      localStorage.setItem("authUser", JSON.stringify(authUser));
+      localStorage.setItem("token", access_token);
+      localStorage.setItem("refreshToken", refresh_token);
+      localStorage.setItem(
+        "tokenExpiry",
+        (Date.now() + expires_in * 1000).toString()
+      );
 
-        setAuthState({
-          user: authUser,
-          isAuthenticated: true,
-          isLoading: false,
-        });
+      setAuthState({
+        user: authUser,
+        isAuthenticated: true,
+        isLoading: false,
+      });
 
-        notifyWebSocket(); // 🔔 thông báo WS connect lại
+      notifyWebSocket();
 
-        return true;
-      }
-
-      return false;
+      return true;
     } catch (error) {
       console.error("Login error:", error);
       return false;
@@ -160,12 +230,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const logout = () => {
     localStorage.removeItem("authUser");
     localStorage.removeItem("token");
+    localStorage.removeItem("refreshToken");
+    localStorage.removeItem("tokenExpiry");
+
     setAuthState({
       user: null,
       isAuthenticated: false,
       isLoading: false,
     });
-    notifyWebSocket(); // 🔔 disconnect WS khi logout
+
+    notifyWebSocket();
   };
 
   return (
